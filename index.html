@@ -49,7 +49,7 @@
               console.log([x,z]);
               s = Math.random()*3;
               s = message.text.length;
-              createCube({x:s,y:s,z:s},{x:x,y:50,z:z});
+              createCube({x:s,y:s,z:s},{x:x,y:50,z:z},message.text);
           }
           //coord.textContent = JSON.stringify(message.coordinates.coordinates)
           //else
@@ -365,13 +365,51 @@ window.fps = {
         return result;
     }
 };
-function createCube(size,pos) {
+function createCube(size,pos, text) {
+    if (typeof text != "string") text = null;
+    if (text) {
+        // create a canvas element
+        var canvas1 = document.createElement('canvas');
+        var ctx = canvas1.getContext('2d');
+        ctx.fillStyle = '#FFF';
+
+        ctx.fillRect(0,0,canvas1.width,canvas1.height)
+        ctx.font = "Bold 40px Arial";
+        ctx.fillStyle = "rgba(0,0,0,0.95)";
+        size.x = ctx.measureText(text).width/10;
+        size.y = 10;//text.length/size.x
+        size.z = 1;
+        console.log([size.x,size.y]);
+        ctx.fillText(text, 0, 50);
+
+        // canvas contents will be used for a texture
+        var texture1 = new THREE.Texture(canvas1)
+        texture1.needsUpdate = true;
+
+        var material1 = new THREE.MeshBasicMaterial( {map: texture1, side:THREE.DoubleSide } );
+        //material1.transparent = true;
+
+//        var mesh1 = new THREE.Mesh(
+//                new THREE.PlaneGeometry(canvas1.width, canvas1.height),
+//                material1
+//        );
+        //mesh1.position.set(0,50,0);
+        //scene.add( mesh1 );
+
+    }
     //var cube = new OIMO.Body({type:"box", size:[size.x,size.y,size.z], pos:[10,7,12], rot:[0,0,0], move:true, world:world, name:'head' });
     var cubegeometry = new THREE.BoxGeometry( size.x,size.y,size.z);
-    var cubematerial = new THREE.MeshPhongMaterial( { color: 0xddaabb, specular:  0x050505, shininess: 20, vertexColors: 0xddaabb, shading: THREE.FlatShading } );
+    var cubematerial;
+    if (text) {
+        //cubematerial = material1;
+        cubematerial = new THREE.MeshPhongMaterial({ map: texture1, side: THREE.FrontSide,color: 0xddaabb, specular: 0x050505, shininess: 20, vertexColors: 0xddaabb, shading: THREE.FlatShading });
 
+    } else {
+        cubematerial = new THREE.MeshPhongMaterial({ color: 0xddaabb, specular: 0x050505, shininess: 20, vertexColors: 0xddaabb, shading: THREE.FlatShading });
+    }
     var cube = new THREE.Mesh( cubegeometry, cubematerial );
-
+    cube.rotation.y = -Math.PI/2;
+    //cube.rotation.x = Math.PI/2;
     cube.position.copy(pos);
     cube.castShadow = true;
     cube.receiveShadow = true;
@@ -403,6 +441,8 @@ function render() {
         }
 
         client.mesh.translateZ(0);
+        camera.position.z = client.mesh.position.z + 500;
+        camera.position.x = client.mesh.position.x;
     }
 
     // Render bullets
