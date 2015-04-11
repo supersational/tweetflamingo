@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>flamingo</title>
+
+    <script src="js/three.min.js"></script>
+    <script src="js/Oimo.min.js"></script>
+    <script src="js/v3d.js"></script>
+    <script src="js/threex.oimo.js"></script>
+    <style type="text/css">
+        html, body {
+            height: 100%;
+            width: 100%;
+            position: relative;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            overflow: hidden;
+        }
+
+        div#fps {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-family: Courier;
+            font-weight: bold;
+            color: rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body>
+<div id="fps"></div>
+<div id="container"></div>
+<script src="https://js.pusher.com/2.2/pusher.min.js"></script>
+    <script type="text/javascript">
+      var pusher = new Pusher('e90170eabd1af4f8e8fc');
+      var channel = pusher.subscribe('twitter-geo');
+      channel.bind('tweet', function(message) {
+          //data.textContent = JSON.stringify(message, null, 2);
+          console.log(message.text);
+          //place.textContent = message.place.name || '...';
+          // {"type":"Point","coordinates":[_, _]}
+          if(message.coordinates && message.coordinates.coordinates){
+              document.getElementById('fps').innerText = message.text;
+
+              x = message.coordinates.coordinates[0]-(-1.461182);
+              z = message.coordinates.coordinates[1]-(51.6429935);
+              x *= 100; z *= 100;
+              console.log([x,z]);
+              s = Math.random()*3;
+              s = message.text.length;
+              createCube({x:s,y:s,z:s},{x:x,y:50,z:z});
+          }
+          //coord.textContent = JSON.stringify(message.coordinates.coordinates)
+          //else
+          //coord.textContent = '...';
+      });
+    </script>
+<script type="x-shader/x-vertex" id="vertexShader">
+
+    varying vec3 vWorldPosition;
+
+    void main() {
+
+      vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+      vWorldPosition = worldPosition.xyz;
+
+      gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+    }
+
+  </script>
+
+  <script type="x-shader/x-fragment" id="fragmentShader">
+
+    uniform vec3 topColor;
+    uniform vec3 bottomColor;
+    uniform float offset;
+    uniform float exponent;
+
+    varying vec3 vWorldPosition;
+
+    void main() {
+
+      float h = normalize( vWorldPosition + offset ).y;
+      gl_FragColor = vec4( mix( bottomColor, topColor, max( pow( max( h , 0.0), exponent ), 0.0 ) ), 1.0 );
+
+    }
+
+  </script>
+
+<script>
+
+// three.js view with geometrys and materials ../js/v3d.js
+//var v3d = new V3D.View();
+</script>
+<script>
+// OIMO SHIZZLE GOES UP HERE
+var bodys = [];
+var joints = [];
+
+var types = [], sizes = [];
+// create oimo world contains all rigidBodys and joint.
+var world	= new OIMO.World(1/360, 2, 8);
+var onRenderFcts= []; // contains all the functions to update mesh-physics relationships
+
+var lastTimeMsec= null
+
+setInterval(function(){
+    world.step()
+}, 1000/180);
+
+var camera, scene, renderer, dirLight, hemiLight;
+
+var bullets = [];
+var clients = {};
+createClient(1); // test client (for sven's shite localhost)
+
+var scenery = [];
+var sceneryDispersion = 2000; // how much the cubes should be scattered about
+var numSceneryObjects = 40;
+      
+var clock = new THREE.Clock();
+var coolDown = 0;
+
+var playerKeys = {"u":0,"d":0,"l":0,"r":0,"s":0,"p":1};
+
+init();
+animate();
+
+function init() {
+    var container = document.getElementById('container');
+
+    // Camera
+    camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 1, 5000);
+    camera.position.set(0, 0, 250);
+
+    // Scene
+    scene = new THREE.Scene();
+
+    // Fog
+    scene.fog = new THREE.Fog(0xffffff, 1, 5000);
+    scene.fog.color.setHSL(0.6, 0, 1);
+
+    // Lights
+    hemiLight = new THREE.HemisphereLight( 0xffffff, 0xffffff, 0.8 );
+    hemiLight.color.setHSL( 1, 0.6, 0.6 );
+    hemiLight.groundColor.setHSL( 0.095, 1, 0.75 );
+    hemiLight.position.set( 0, 500, 0 );
+    scene.add( hemiLight );
+
+    dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.color.setHSL(0.1, 1, 0.95);
+    dirLight.position.set(0, 200, 0);
+
+    dirLight.castShadow = true;
+
+    dirLight.shadowMapWidth = 2048;
+    dirLight.shadowMapHeight = 2048;
+
+    var d = 150;
+    dirLight.shadowCameraLeft = -d;
+    dirLight.shadowCameraRight = d;
+    dirLight.shadowCameraTop = d;
+    dirLight.shadowCameraBottom = -d;
+
+    dirLight.shadowDarkness = 0.3;
+    // dirLight.shadowCameraVisible = true;
+
+
+    scene.add(dirLight);
+
+
+    // Ground
+    var groundGeo = new THREE.PlaneBufferGeometry( 10000, 10000 );
+    var groundMat = new THREE.MeshPhongMaterial( { color: 0xffffff, specular: 0x050505 } );
+    groundMat.color.setRGB( 0.98, 0.93, 0.69 );
+
+    var ground = new THREE.Mesh( groundGeo, groundMat );
+        
+    ground.rotation.x = -Math.PI/2;
+    ground.position.y = -33;
+    ground.receiveShadow = true;
+
+    //scene.add(ground);
+    // gotta make a box version since Oimo can't deal with plane geometries
+    var groundGeo2 = new THREE.BoxGeometry(10000,10,10000);
+    var ground2 = new THREE.Mesh( groundGeo2, groundMat );
+    //ground2.rotation.x = -Math.PI/2;
+    ground2.position.y = -33; // the extra 5 should account for the height of 10?
+    ground2.receiveShadow = true;
+    scene.add(ground2);
+
+    var groundBody = THREEx.Oimo.createBodyFromMesh(world, ground2, {move:false})
+    onRenderFcts.push(function (delta) {
+        THREEx.Oimo.updateObject3dWithBody(ground2, groundBody);
+    });
+
+    // CUBES
+
+    var geometry = new THREE.BoxGeometry( 6, 6, 6 );
+    var material = new THREE.MeshPhongMaterial( { color: 0xddaabb, specular:  0x050505, shininess: 20, vertexColors: 0xddaabb, shading: THREE.FlatShading } );
+
+//    for (var i=0;i<numSceneryObjects;i++) {
+//      	(function() {
+//
+//            var cube = new THREE.Mesh(geometry, material);
+//            cube.position.y = -33 + Math.random() + 10;
+//
+//            cube.position.x = (-0.5 + Math.random()) * sceneryDispersion;
+//            cube.position.z = camera.position.z - Math.random() * sceneryDispersion; // spawn the cubes only in front of the camera
+//            cube.rotation.x = -Math.PI / 4;
+//            cube.rotation.y = -Math.PI / 4;
+//            cube.rotation.z = Math.random() * 2 * Math.PI;
+//            var s = 1 + Math.random();
+//            cube.scale.set(s, s, s);
+//            cube.castShadow = true;
+//            cube.receiveShadow = true;
+//            scenery.push(cube);
+//            scene.add(cube);
+//            var cubeBody = THREEx.Oimo.createBodyFromMesh(world, cube);
+//            onRenderFcts.push(function (delta) {
+//                THREEx.Oimo.updateObject3dWithBody(cube, cubeBody);
+//            });
+//	    })();
+//    }
+    // more cubessss
+    createCube({x:100,y:5,z:10},{x:0,y:0,z:10},{});
+    createCube({x:100,y:5,z:10},{x:0,y:0,z:-10},{});
+    createCube({x:20,y:20,z:20},{x:-40,y:-20,z:0},{});
+    createCube({x:20,y:25,z:20},{x: 40,y:-20,z:0},{});
+    createCube({x:10,y:10,z:10},{x: 40,y:0,z:100},{});
+    createCube({x:10,y:10,z:10},{x: 40,y:10,z:100},{});
+    createCube({x:10,y:10,z:10},{x: 40,y:20,z:100},{});
+    createCube({x:10,y:10,z:10},{x: 40,y:30,z:100},{});
+    createCube({x:10,y:10,z:10},{x: 40,y:40,z:100},{});
+    // Sky
+    var vertexShader = document.getElementById( 'vertexShader' ).textContent;
+    var fragmentShader = document.getElementById( 'fragmentShader' ).textContent;
+    var uniforms = {
+        topColor:    { type: "c", value: new THREE.Color( 0x0077ff ) },
+        bottomColor: { type: "c", value: new THREE.Color( 0xffffff ) },
+        offset:    { type: "f", value: 33 },
+        exponent:  { type: "f", value: 0.6 }
+    };
+    uniforms.topColor.value.copy( hemiLight.color );
+
+    scene.fog.color.copy( uniforms.bottomColor.value );
+
+    var skyGeo = new THREE.SphereGeometry( 4000, 32, 15 );
+    var skyMat = new THREE.ShaderMaterial( { vertexShader: vertexShader, fragmentShader: fragmentShader, uniforms: uniforms, side: THREE.BackSide } );
+
+    var sky = new THREE.Mesh(skyGeo, skyMat);
+    scene.add(sky);
+
+    // createClient();
+
+    // Renderer
+    renderer = new THREE.WebGLRenderer( { antialias: true } );
+    renderer.setClearColor( scene.fog.color );
+    renderer.setPixelRatio( window.devicePixelRatio );
+    renderer.setSize( window.innerWidth, window.innerHeight );
+    container.appendChild( renderer.domElement );
+
+    renderer.gammaInput = true;
+    renderer.gammaOutput = true;
+
+    renderer.shadowMapEnabled = true;
+    renderer.shadowMapCullFace = THREE.CullFaceBack;
+
+
+    window.addEventListener( 'resize', onWindowResize, false );
+    document.addEventListener( 'keydown', onKeyDown, false );
+    document.addEventListener( 'keyup', onKeyUp, false );
+}
+
+function morphColorsToFaceColors( geometry ) {
+
+    if ( geometry.morphColors && geometry.morphColors.length ) {
+
+        var colorMap = geometry.morphColors[ 0 ];
+
+        for ( var i = 0; i < colorMap.colors.length; i ++ ) {
+
+            geometry.faces[ i ].color = colorMap.colors[ i ];
+
+        }
+
+    }
+
+}
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function onKeyDown ( event ) {
+    switch (event.keyCode) {
+        // p (hide collision box)
+        case 80:
+            playerKeys["p"] = !playerKeys["p"];
+            break;
+        // space
+        case 32:
+            playerKeys["s"] = 1;
+            break;
+
+        // arrow keys
+        case 37:
+            playerKeys["l"] = 1;
+            break;
+        case 39:
+            playerKeys["r"] = 1;
+            break;
+        case 38:
+            playerKeys["d"] = 1;
+            break;
+        case 40:
+            playerKeys["u"] = 1;
+            break;
+    }
+}
+      
+function onKeyUp (event) {
+    switch (event.keyCode) {
+        case 37:
+            playerKeys["l"] = 0;
+            break;
+        case 39:
+            playerKeys["r"] = 0;
+            break;
+        case 38:
+            playerKeys["d"] = 0;
+            break;
+        case 40:
+            playerKeys["u"] = 0;
+            break;
+    }
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    render();
+        
+    //document.getElementById('fps').innerText = window.fps.getFPS();
+}
+
+window.fps = {
+    startTime : 0,
+    frameNumber : 0,
+    getFPS : function(){
+        this.frameNumber++;
+        var d = new Date().getTime(),
+                currentTime = ( d - this.startTime ) / 1000,
+                result = Math.floor( ( this.frameNumber / currentTime ) );
+
+        if( currentTime > 1 ){
+            this.startTime = new Date().getTime();
+            this.frameNumber = 0;
+        }
+        return result;
+    }
+};
+function createCube(size,pos) {
+    //var cube = new OIMO.Body({type:"box", size:[size.x,size.y,size.z], pos:[10,7,12], rot:[0,0,0], move:true, world:world, name:'head' });
+    var cubegeometry = new THREE.BoxGeometry( size.x,size.y,size.z);
+    var cubematerial = new THREE.MeshPhongMaterial( { color: 0xddaabb, specular:  0x050505, shininess: 20, vertexColors: 0xddaabb, shading: THREE.FlatShading } );
+
+    var cube = new THREE.Mesh( cubegeometry, cubematerial );
+
+    cube.position.copy(pos);
+    cube.castShadow = true;
+    cube.receiveShadow = true;
+    //cube.quaternion.copy(headBody.getQuaternion());
+    scene.add(cube);
+    var cubeBody = THREEx.Oimo.createBodyFromMesh(world,cube);
+    cube.body = cubeBody; // this is for our own reference
+
+    onRenderFcts.push(function (delta) {
+        THREEx.Oimo.updateObject3dWithBody(cube, cubeBody); // this doesn't work for animated.. no prob!
+    });
+    return cube;
+}
+function render() {
+    var delta = clock.getDelta();
+
+    // Render clients
+    for (var clientId in clients) {
+        var client = clients[clientId];
+
+        client.mesh.updateAnimation(1000 * delta);
+
+        if (client.meshBody) {
+            client.meshBody.body.angularVelocity.y =(playerKeys["l"] - playerKeys["r"]) * delta * 1000;
+            client.meshBody.body.angularVelocity.x =(playerKeys["u"] - playerKeys["d"]) * delta * 1000;
+            client.meshBody.body.sleeping = false;
+            //client.meshBody.body.linearVelocity.x += 0.01;
+            //client.meshBody.body.applyImpulse(new OIMO.Vec3(0,0,0),new OIMO.Vec3(-1*delta*0.01,0,0));
+        }
+
+        client.mesh.translateZ(0);
+    }
+
+    // Render bullets
+    for (var i = 0; i < bullets.length; i += 1) {
+        var bullet = bullets[i];
+        bullet.translateZ(6);
+    }
+
+    //bullet
+    coolDown += delta ;
+    if (playerKeys["s"]) {
+        if (coolDown > 0.001) {
+            for (var clientId in clients) {
+                shootBullet(clients[clientId]);
+            }
+            
+            coolDown = 0;
+            playerKeys["s"] = 0;
+        }
+    }
+
+    // all of oimo's stuff
+    // measure time
+    lastTimeMsec	= lastTimeMsec || delta-1000/60
+    var deltaMsec	= Math.min(200, delta - lastTimeMsec) // I don't think it can handle small deltas
+    lastTimeMsec	= delta
+    // call each update function
+    onRenderFcts.forEach(function(onRenderFct){
+			onRenderFct(deltaMsec/1000, delta/1000)
+		});
+
+    renderer.render( scene, camera );
+
+}
+
+function shootBullet(client) {
+    var bulletGeometry = new THREE.SphereGeometry(0.8);
+    var bulletMaterial = new THREE.MeshBasicMaterial( { color: 0x333333 } );
+
+    var cube = new THREE.Mesh( bulletGeometry, bulletMaterial );
+
+    var pos = client.mesh.position;
+    var rot = client.mesh.rotation;
+
+    cube.position.set(pos.x, pos.y, pos.z);
+    cube.rotation.set(rot.x, rot.y, rot.z);
+
+    scene.add(cube);
+    bullets.push(cube);
+}
+
+function createClient(clientId) {
+    // Model
+    var loader = new THREE.JSONLoader();
+    var models = {
+        "flamingo":"models/flamingo.js",
+        "parrot":"models/parrot.js",
+        "stork":"models/stork.js",
+        "horse":"models/horse.js"
+    };
+          
+    loader.load(models["flamingo"], function (geometry) {
+        morphColorsToFaceColors(geometry);
+        geometry.computeMorphNormals();
+
+        var material = new THREE.MeshPhongMaterial({
+            color: 0xffffff,
+            specular: 0xffffff,
+            shininess: 20,
+            morphTargets: true,
+            morphNormals: true,
+            vertexColors: THREE.FaceColors,
+            shading: THREE.FlatShading
+        });
+
+        var mesh = new THREE.MorphAnimMesh(geometry, material);
+
+        mesh.duration = 1000;
+
+        mesh.scale.set(0.35, 0.35, 0.35);
+        mesh.position.y = 15;
+
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+
+        scene.add(mesh);
+
+        // now add some cubes for the OIMO
+        var cubegeometry = new THREE.BoxGeometry( 10,7,24);
+        var cubematerial = new THREE.MeshPhongMaterial( { color: 0xddaabb, specular:  0x050505, shininess: 20, vertexColors: 0xddaabb, shading: THREE.FlatShading } );
+
+        var cube = new THREE.Mesh( cubegeometry, cubematerial );
+
+        cube.position.copy(mesh.position);
+        cube.castShadow = true;
+        cube.receiveShadow = true;
+        cube.quaternion.copy(mesh.quaternion);
+        cube.translateY(-2);
+
+        scene.add(cube);
+        var meshBody = THREEx.Oimo.createBodyFromMesh(world,cube);
+        console.log(meshBody);
+//        var headBody = new OIMO.Body({type:"box", size:[200,9,17], pos:[10,7,12], rot:[0,0,0], move:true, world:world, name:'head' });
+//        cubegeometry = new THREE.BoxGeometry( 200,9,17);
+//        var headCube = new THREE.Mesh( cubegeometry, cubematerial );
+//
+//        headCube.position.copy(headBody.getPosition());
+//        headCube.castShadow = true;
+//        headCube.receiveShadow = true;
+//        headCube.quaternion.copy(headBody.getQuaternion());
+//        scene.add(headCube);
+//        console.log(headBody);
+        //OIMO.addRigidBody({ type:"ground", size:[2540,300,1270], pos:[0,-150,0] })
+        onRenderFcts.push(function (delta) {
+            THREEx.Oimo.updateObject3dWithBody(cube, meshBody); // this doesn't work for animated.. no prob!
+//            THREEx.Oimo.updateObject3dWithBody(headCube, headBody); // this doesn't work for animated.. no prob!
+
+            mesh.position.copy(meshBody.getPosition());
+            mesh.quaternion.copy(meshBody.getQuaternion());
+            //headCube.position.copy(headBody.getPosition());
+            //headCube.quaternion.copy(headBody.getQuaternion());
+        });
+        /*onRenderFcts.push(function (delta) {
+            cube.position.copy(mesh.position);
+            cube.quaternion.copy(mesh.quaternion);
+            cube.translateY(-2);
+            cube.visible = playerKeys["p"];
+        });*/
+        //mesh.children.push(cube);
+        clients[clientId] = {
+            mesh: mesh,
+            meshBody: meshBody,
+            rotation: {
+                a: 0,
+                b: 0,
+                g: 0,
+                o: 0,
+                enabled: false // this is so we can use the arrow keys before connecting
+            }
+        };
+    });
+}
+
+</script>
+
+</body>
+</html>
